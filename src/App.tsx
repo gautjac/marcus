@@ -3,13 +3,51 @@ import { db, type Entry } from "./db";
 import { principleForDate, principleById, type Principle } from "./principles";
 import { todayISO, formatLong, monthDay } from "./date";
 import { fetchEcho } from "./api";
+import type { Lang } from "./types";
 import Onboarding from "./components/Onboarding";
 import History, { YearsPast } from "./components/History";
 
 type View = "today" | "history";
 const ONBOARD_KEY = "marcus.onboarded";
+const LANG_KEY = "marcus.lang";
+
+function initialLang(): Lang {
+  const saved = localStorage.getItem(LANG_KEY);
+  if (saved === "fr" || saved === "en") return saved;
+  return navigator.language?.toLowerCase().startsWith("en") ? "en" : "fr";
+}
+
+export const LABELS = {
+  fr: {
+    today: "Aujourd'hui",
+    notebook: "Le carnet →",
+    reread: "relecture",
+    placeholder: "Quelques lignes, sans pression…",
+    saving: "enregistrement…",
+    saved: "enregistré",
+    askEcho: "Un écho ?",
+    echoError: "L'écho demande le réseau — réessaie plus tard.",
+    retry: "réessayer",
+  },
+  en: {
+    today: "Today",
+    notebook: "The notebook →",
+    reread: "rereading",
+    placeholder: "A few lines, no pressure…",
+    saving: "saving…",
+    saved: "saved",
+    askEcho: "An echo?",
+    echoError: "The echo needs the network — try again later.",
+    retry: "retry",
+  },
+} as const;
 
 export default function App() {
+  const [lang, setLang] = useState<Lang>(initialLang);
+  useEffect(() => {
+    localStorage.setItem(LANG_KEY, lang);
+  }, [lang]);
+
   const [showOnboard, setShowOnboard] = useState(() => !localStorage.getItem(ONBOARD_KEY));
   const [view, setView] = useState<View>("today");
   const [today] = useState(todayISO);
@@ -30,35 +68,62 @@ export default function App() {
 
   return (
     <>
-      {showOnboard && <Onboarding onClose={closeOnboard} />}
+      {showOnboard && <Onboarding onClose={closeOnboard} lang={lang} />}
       {view === "today" ? (
         <TodayScreen
           date={activeDate}
           isToday={activeDate === today}
+          lang={lang}
+          onLangChange={setLang}
           onBackToToday={() => setActiveDate(today)}
           onOpenHistory={() => setView("history")}
           onOpenDate={openDate}
         />
       ) : (
-        <History onOpenDate={openDate} onClose={() => setView("today")} />
+        <History lang={lang} onLangChange={setLang} onOpenDate={openDate} onClose={() => setView("today")} />
       )}
     </>
+  );
+}
+
+function LangToggle({ lang, onChange }: { lang: Lang; onChange: (l: Lang) => void }) {
+  return (
+    <div className="flex rounded-lg border border-paper-line overflow-hidden text-xs">
+      {(["fr", "en"] as Lang[]).map((l) => (
+        <button
+          key={l}
+          onClick={() => onChange(l)}
+          className={`px-2.5 py-1 uppercase tracking-wide transition-colors ${
+            lang === l
+              ? "bg-paper-terra text-paper-panel"
+              : "text-paper-soft hover:text-paper-ink"
+          }`}
+        >
+          {l}
+        </button>
+      ))}
+    </div>
   );
 }
 
 function TodayScreen({
   date,
   isToday,
+  lang,
+  onLangChange,
   onBackToToday,
   onOpenHistory,
   onOpenDate,
 }: {
   date: string;
   isToday: boolean;
+  lang: Lang;
+  onLangChange: (l: Lang) => void;
   onBackToToday: () => void;
   onOpenHistory: () => void;
   onOpenDate: (date: string) => void;
 }) {
+  const t = LABELS[lang];
   const [text, setText] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
@@ -71,9 +136,10 @@ function TodayScreen({
 
   // The principle for a past date is the one actually stored with the entry (if
   // any); otherwise the deterministic principle for that date.
-  const [principle, setPrinciple] = useState<Principle>(() => principleForDate(date));
+  const [principle, setPrinciple] = useState<Principle>(() => principleForDate(date, lang));
 
-  // Load the entry for this date.
+  // Load the entry for this date. Re-runs on lang change so the shown principle
+  // (and the deterministic fallback) follow the selected language.
   useEffect(() => {
     let alive = true;
     setLoaded(false);
@@ -82,14 +148,14 @@ function TodayScreen({
     db.entries.get(date).then((e) => {
       if (!alive) return;
       setText(e?.text ?? "");
-      const stored = e ? principleById(e.principleId) : undefined;
-      setPrinciple(stored ?? principleForDate(date));
+      const stored = e ? principleById(e.principleId, lang) : undefined;
+      setPrinciple(stored ?? principleForDate(date, lang));
       setLoaded(true);
     });
     return () => {
       alive = false;
     };
-  }, [date]);
+  }, [date, lang]);
 
   // Debounced autosave. Never destructive — upserts one row per date.
   const scheduleSave = useCallback(
@@ -136,7 +202,7 @@ function TodayScreen({
     setEchoState("loading");
     setEcho("");
     try {
-      const e = await fetchEcho(principle, text.trim());
+      const e = await fetchEcho(principle, text.trim(), lang);
       setEcho(e);
       setEchoState("idle");
     } catch {
@@ -153,19 +219,20 @@ function TodayScreen({
         <header className="flex items-center justify-between mb-10">
           <div className="font-serif italic text-lg text-paper-terra select-none">Marcus</div>
           <div className="flex items-center gap-4">
+            <LangToggle lang={lang} onChange={onLangChange} />
             {!isToday && (
               <button
                 onClick={onBackToToday}
                 className="text-sm text-paper-soft hover:text-paper-ink transition-colors"
               >
-                Aujourd'hui
+                {t.today}
               </button>
             )}
             <button
               onClick={onOpenHistory}
               className="text-sm text-paper-terra hover:text-paper-terraSoft transition-colors"
             >
-              Le carnet →
+              {t.notebook}
             </button>
           </div>
         </header>
@@ -175,8 +242,8 @@ function TodayScreen({
         ) : (
           <main className="fadeup">
             <p className="text-sm text-paper-soft mb-8">
-              {formatLong(date)}
-              {!isToday && <span className="text-paper-faint"> · relecture</span>}
+              {formatLong(date, lang)}
+              {!isToday && <span className="text-paper-faint"> · {t.reread}</span>}
             </p>
 
             {/* The principle */}
@@ -207,13 +274,13 @@ function TodayScreen({
               <textarea
                 value={text}
                 onChange={(e) => onChange(e.target.value)}
-                placeholder="Quelques lignes, sans pression…"
+                placeholder={t.placeholder}
                 spellCheck
                 className="w-full min-h-[220px] resize-y rounded-2xl border border-paper-line bg-paper-panel/70 px-6 py-5 text-[1.2rem] leading-relaxed text-paper-ink placeholder:text-paper-faint/70 focus:outline-none focus:border-paper-terra/60 focus:bg-paper-panel transition-colors"
               />
               <div className="h-5 mt-1.5 text-xs text-paper-faint select-none">
-                {saveState === "saving" && "enregistrement…"}
-                {saveState === "saved" && "enregistré"}
+                {saveState === "saving" && t.saving}
+                {saveState === "saved" && t.saved}
               </div>
             </div>
 
@@ -224,15 +291,15 @@ function TodayScreen({
                   onClick={askEcho}
                   className="text-sm text-paper-terra hover:text-paper-terraSoft transition-colors underline decoration-paper-line underline-offset-4"
                 >
-                  Un écho ?
+                  {t.askEcho}
                 </button>
               )}
               {echoState === "loading" && <p className="text-sm text-paper-faint">…</p>}
               {echoState === "error" && (
                 <p className="text-sm text-paper-soft">
-                  L'écho demande le réseau — réessaie plus tard.{" "}
+                  {t.echoError}{" "}
                   <button onClick={askEcho} className="text-paper-terra underline underline-offset-2">
-                    réessayer
+                    {t.retry}
                   </button>
                 </p>
               )}
@@ -244,7 +311,7 @@ function TodayScreen({
             </div>
 
             {/* This date, years past */}
-            <YearsPast monthDayKey={monthDay(date)} currentDate={date} onOpenDate={onOpenDate} />
+            <YearsPast monthDayKey={monthDay(date)} currentDate={date} lang={lang} onOpenDate={onOpenDate} />
           </main>
         )}
       </div>

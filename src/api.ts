@@ -3,9 +3,10 @@
 
 import type { Entry } from "./db";
 import type { Principle } from "./principles";
+import type { Lang } from "./types";
 
 /** /api/echo — FAST, plain JSON. A brief warm reflection on today's entry. */
-export async function fetchEcho(principle: Principle, text: string): Promise<string> {
+export async function fetchEcho(principle: Principle, text: string, lang: Lang): Promise<string> {
   const res = await fetch("/api/echo", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -15,6 +16,7 @@ export async function fetchEcho(principle: Principle, text: string): Promise<str
       gloss: principle.gloss,
       prompt: principle.prompt,
       text,
+      lang,
     }),
   });
   if (!res.ok) throw new Error(`echo ${res.status}`);
@@ -34,7 +36,11 @@ interface RevueEntry {
  * /api/revue — MODEL (opus), wrapped in ndjsonStream on the server. We read the
  * stream and parse the LAST non-empty JSON line, which carries {result} or {error}.
  */
-export async function fetchRevue(entries: Entry[], resolve: (id: string) => Principle | undefined): Promise<string> {
+export async function fetchRevue(
+  entries: Entry[],
+  resolve: (id: string) => Principle | undefined,
+  lang: Lang
+): Promise<string> {
   const payload: RevueEntry[] = entries.map((e) => {
     const p = resolve(e.principleId);
     return {
@@ -48,7 +54,7 @@ export async function fetchRevue(entries: Entry[], resolve: (id: string) => Prin
   const res = await fetch("/api/revue", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ entries: payload }),
+    body: JSON.stringify({ entries: payload, lang }),
   });
   if (!res.ok && res.status !== 200) throw new Error(`revue ${res.status}`);
   if (!res.body) throw new Error("Pas de flux");
